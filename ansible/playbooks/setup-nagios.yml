@@ -1,0 +1,278 @@
+---
+- name: Setup Nagios Monitoring Server
+  hosts: monitoring
+  become: true
+  gather_facts: true
+
+  vars:
+    nagios_version: "4.4.14"
+    nagios_plugins_version: "2.4.6"
+    nagios_admin_user: nagiosadmin
+    nagios_admin_password: nagiosadmin
+    backend_ip: "{{ hostvars[groups['backend'][0]]['ansible_default_ipv4']['address'] if groups['backend'] | length > 0 else '127.0.0.1' }}"
+    frontend_ip: "{{ hostvars[groups['frontend'][0]]['ansible_default_ipv4']['address'] if groups['frontend'] | length > 0 else '127.0.0.1' }}"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install prerequisites
+      apt:
+        name:
+          - apache2
+          - php
+          - php-gd
+          - libgd-dev
+          - libapache2-mod-php
+          - build-essential
+          - libssl-dev
+          - wget
+          - unzip
+          - openssl
+          - apache2-utils
+        state: present
+
+    - name: Create nagios user
+      user:
+        name: nagios
+        system: true
+        shell: /bin/bash
+
+    - name: Create nagcmd group
+      group:
+        name: nagcmd
+        system: true
+
+    - name: Add nagios and www-data to nagcmd group
+      user:
+        name: "{{ item }}"
+        groups: nagcmd
+        append: true
+      loop:
+        - nagios
+        - www-data
+
+    - name: Download Nagios Core
+      get_url:
+        url: "https://github.com/NagiosEnterprises/nagioscore/releases/download/nagios-{{ nagios_version }}/nagios-{{ nagios_version }}.tar.gz"
+        dest: "/tmp/nagios-{{ nagios_version }}.tar.gz"
+        mode: '0644'
+
+    - name: Extract Nagios Core
+      unarchive:
+        src: "/tmp/nagios-{{ nagios_version }}.tar.gz"
+        dest: /tmp/
+        remote_src: yes
+        creates: "/tmp/nagios-{{ nagios_version }}"
+
+    - name: Configure Nagios
+      command: ./configure --with-command-group=nagcmd --with-httpd-conf=/etc/apache2/sites-available
+      args:
+        chdir: "/tmp/nagios-{{ nagios_version }}"
+        creates: /tmp/nagios-{{ nagios_version }}/Makefile
+
+    - name: Compile Nagios
+      make:
+        chdir: "/tmp/nagios-{{ nagios_version }}"
+        target: all
+
+    - name: Install Nagios
+      make:
+        chdir: "/tmp/nagios-{{ nagios_version }}"
+        target: "{{ item }}"
+      loop:
+        - install
+        - install-init
+        - install-commandmode
+        - install-config
+
+    - name: Install Nagios web configuration
+      make:
+        chdir: "/tmp/nagios-{{ nagios_version }}"
+        target: install-webconf
+
+    - name: Create nagiosadmin user for web interface
+      command: htpasswd -bc /usr/local/nagios/etc/htpasswd.users {{ nagios_admin_user }} {{ nagios_admin_password }}
+      args:
+        creates: /usr/local/nagios/etc/htpasswd.users
+
+    - name: Download Nagios Plugins
+      get_url:
+        url: "https://github.com/nagios-plugins/nagios-plugins/releases/download/release-{{ nagios_plugins_version }}/nagios-plugins-{{ nagios_plugins_version }}.tar.gz"
+        dest: "/tmp/nagios-plugins-{{ nagios_plugins_version }}.tar.gz"
+        mode: '0644'
+
+    - name: Extract Nagios Plugins
+      unarchive:
+        src: "/tmp/nagios-plugins-{{ nagios_plugins_version }}.tar.gz"
+        dest: /tmp/
+        remote_src: yes
+        creates: "/tmp/nagios-plugins-{{ nagios_plugins_version }}"
+
+    - name: Configure Nagios Plugins
+      command: ./configure --with-nagios-user=nagios --with-nagios-group=nagios
+      args:
+        chdir: "/tmp/nagios-plugins-{{ nagios_plugins_version }}"
+        creates: /tmp/nagios-plugins-{{ nagios_plugins_version }}/Makefile
+
+    - name: Compile Nagios Plugins
+      make:
+        chdir: "/tmp/nagios-plugins-{{ nagios_plugins_version }}"
+
+    - name: Install Nagios Plugins
+      make:
+        chdir: "/tmp/nagios-plugins-{{ nagios_plugins_version }}"
+        target: install
+
+    - name: Create host configuration for backend
+      copy:
+        content: |
+          define host {
+              use                     linux-server
+              host_name               backend-server
+              alias                   Backend Server
+              address                 {{ backend_ip }}
+              max_check_attempts      5
+              check_period            24x7
+              notification_interval   30
+              notification_period     24x7
+          }
+
+          define service {
+              use                     generic-service
+              host_name               backend-server
+              service_description     PING
+              check_command           check_ping!100.0,20%!500.0,60%
+          }
+
+          define service {
+              use                     generic-service
+              host_name               backend-server
+              service_description     SSH
+              check_command           check_ssh
+          }
+
+          define service {
+              use                     generic-service
+              host_name               backend-server
+              service_description     Backend API
+              check_command           check_http!-p 5000 -u /health
+          }
+        dest: /usr/local/nagios/etc/objects/backend.cfg
+        mode: '0644'
+
+    - name: Create host configuration for frontend
+      copy:
+        content: |
+          define host {
+              use                     linux-server
+              host_name               frontend-server
+              alias                   Frontend Server
+              address                 {{ frontend_ip }}
+              max_check_attempts      5
+              check_period            24x7
+              notification_interval   30
+              notification_period     24x7
+          }
+
+          define service {
+              use                     generic-service
+              host_name               frontend-server
+              service_description     PING
+              check_command           check_ping!100.0,20%!500.0,60%
+          }
+
+          define service {
+              use                     generic-service
+              host_name               frontend-server
+              service_description     SSH
+              check_command           check_ssh
+          }
+
+          define service {
+              use                     generic-service
+              host_name               frontend-server
+              service_description     HTTP
+              check_command           check_http
+          }
+        dest: /usr/local/nagios/etc/objects/frontend.cfg
+        mode: '0644'
+
+    - name: Update nagios.cfg to include host configs
+      lineinfile:
+        path: /usr/local/nagios/etc/nagios.cfg
+        line: "{{ item }}"
+        state: present
+      loop:
+        - "cfg_file=/usr/local/nagios/etc/objects/backend.cfg"
+        - "cfg_file=/usr/local/nagios/etc/objects/frontend.cfg"
+
+    - name: Verify Nagios configuration
+      command: /usr/local/nagios/bin/nagios -v /usr/local/nagios/etc/nagios.cfg
+      register: nagios_verify
+      changed_when: false
+
+    - name: Enable Apache modules
+      apache2_module:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - rewrite
+        - cgi
+
+    - name: Enable Nagios site
+      command: a2ensite nagios
+      args:
+        creates: /etc/apache2/sites-enabled/nagios.conf
+
+    - name: Create systemd service for Nagios
+      copy:
+        content: |
+          [Unit]
+          Description=Nagios
+          After=network.target
+
+          [Service]
+          Type=forking
+          ExecStart=/usr/local/nagios/bin/nagios -d /usr/local/nagios/etc/nagios.cfg
+          ExecReload=/bin/kill -HUP $MAINPID
+          User=nagios
+          Group=nagios
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/nagios.service
+        mode: '0644'
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: true
+
+    - name: Enable and start Nagios
+      systemd:
+        name: nagios
+        state: restarted
+        enabled: true
+
+    - name: Restart Apache
+      systemd:
+        name: apache2
+        state: restarted
+        enabled: true
+
+    - name: Wait for Apache to start
+      wait_for:
+        port: 80
+        delay: 5
+        timeout: 30
+
+    - name: Display Nagios access information
+      debug:
+        msg:
+          - "Nagios is now running!"
+          - "Access URL: http://{{ ansible_default_ipv4.address }}/nagios"
+          - "Username: {{ nagios_admin_user }}"
+          - "Password: {{ nagios_admin_password }}"
+          - "Please change the password after first login!"

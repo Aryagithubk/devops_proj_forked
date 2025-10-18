@@ -1,0 +1,18 @@
+# AWS Region
+aws_region = "us-east-1"
+
+# Project Configuration
+project_name = "devops-project"
+environment  = "development"
+
+# Network Configuration
+vpc_cidr           = "10.0.0.0/16"
+public_subnet_cidr = "10.0.1.0/24"
+
+# EC2 Configuration
+instance_type = "t2.micro"  # Free tier eligible
+key_name      = "devops-project-key"
+
+# AMI ID (Ubuntu 22.04 LTS in us-east-1)
+# Note: Update this if using a different region
+ami_id = "ami-0e86e20dae9224db8"

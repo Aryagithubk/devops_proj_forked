@@ -1,0 +1,54 @@
+---
+- name: Setup Puppet Agent (Masterless Mode)
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Download Puppet repository package
+      get_url:
+        url: "https://apt.puppet.com/puppet8-release-{{ ansible_distribution_release }}.deb"
+        dest: "/tmp/puppet-release.deb"
+        mode: '0644'
+
+    - name: Install Puppet repository
+      apt:
+        deb: /tmp/puppet-release.deb
+
+    - name: Update apt cache after adding repository
+      apt:
+        update_cache: true
+
+    - name: Install Puppet Agent
+      apt:
+        name: puppet-agent
+        state: present
+
+    - name: Add Puppet to PATH
+      lineinfile:
+        path: /etc/environment
+        line: 'PATH="/opt/puppetlabs/bin:$PATH"'
+        state: present
+
+    - name: Create Puppet directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /etc/puppetlabs/code/environments/production/manifests
+        - /etc/puppetlabs/code/environments/production/modules
+
+    - name: Verify Puppet installation
+      command: /opt/puppetlabs/bin/puppet --version
+      register: puppet_version
+      changed_when: false
+
+    - name: Display Puppet version
+      debug:
+        msg: "Puppet {{ puppet_version.stdout }} installed successfully"

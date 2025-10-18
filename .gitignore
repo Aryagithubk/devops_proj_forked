@@ -1,0 +1,53 @@
+# .gitignore for DevOps Project
+
+# Terraform
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/*.tfvars
+!terraform/terraform.tfvars.example
+terraform/tfplan
+terraform/.terraform.tfstate.lock.info
+
+# Ansible
+ansible/*.retry
+ansible/facts/
+ansible/.vault_pass
+
+# Node.js
+applications/*/node_modules/
+applications/*/build/
+applications/*/dist/
+applications/*/.env
+applications/*/npm-debug.log*
+applications/*/yarn-debug.log*
+applications/*/yarn-error.log*
+
+# Puppet
+puppet/.tmp/
+
+# Logs
+*.log
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Project specific
+outputs.txt
+*.pem
+*.key
+!*.pub

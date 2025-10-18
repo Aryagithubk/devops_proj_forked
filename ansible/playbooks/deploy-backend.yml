@@ -1,0 +1,125 @@
+---
+- name: Deploy Node.js Backend Application
+  hosts: backend
+  become: true
+  gather_facts: true
+
+  vars:
+    app_name: backend
+    app_port: 5000
+    app_dir: /opt/backend
+    node_version: "18.x"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name:
+          - curl
+          - git
+          - build-essential
+        state: present
+
+    - name: Add NodeSource repository
+      shell: |
+        curl -fsSL https://deb.nodesource.com/setup_{{ node_version }} | bash -
+      args:
+        creates: /etc/apt/sources.list.d/nodesource.list
+
+    - name: Install Node.js
+      apt:
+        name: nodejs
+        state: present
+        update_cache: true
+
+    - name: Verify Node.js installation
+      command: node --version
+      register: node_version_output
+      changed_when: false
+
+    - name: Display Node.js version
+      debug:
+        msg: "Node.js {{ node_version_output.stdout }} installed"
+
+    - name: Create application directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Copy backend application files
+      copy:
+        src: "{{ playbook_dir }}/../../applications/backend/"
+        dest: "{{ app_dir }}/"
+        mode: '0644'
+
+    - name: Install npm dependencies
+      npm:
+        path: "{{ app_dir }}"
+        state: present
+      environment:
+        NODE_ENV: production
+
+    - name: Create .env file
+      copy:
+        content: |
+          PORT={{ app_port }}
+          NODE_ENV=production
+        dest: "{{ app_dir }}/.env"
+        mode: '0644'
+
+    - name: Create systemd service file
+      copy:
+        content: |
+          [Unit]
+          Description=Node.js Backend Application
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=ubuntu
+          WorkingDirectory={{ app_dir }}
+          ExecStart=/usr/bin/node {{ app_dir }}/server.js
+          Restart=on-failure
+          RestartSec=10
+          StandardOutput=journal
+          StandardError=journal
+          SyslogIdentifier=backend
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/backend.service
+        mode: '0644'
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: true
+
+    - name: Enable and start backend service
+      systemd:
+        name: backend
+        state: restarted
+        enabled: true
+
+    - name: Wait for backend to start
+      wait_for:
+        port: "{{ app_port }}"
+        delay: 5
+        timeout: 30
+
+    - name: Test backend health
+      uri:
+        url: "http://localhost:{{ app_port }}/health"
+        method: GET
+        status_code: 200
+      register: health_check
+      retries: 3
+      delay: 5
+
+    - name: Display backend status
+      debug:
+        msg: "Backend is running successfully at http://{{ ansible_default_ipv4.address }}:{{ app_port }}"
