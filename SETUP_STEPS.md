@@ -219,6 +219,60 @@ Should show your key pair details.
 
 ---
 
+### Troubleshooting SSH Key Creation:
+
+**Issue: "InvalidKeyPair.Duplicate" error**
+
+The key already exists in AWS.
+
+**Solution Option 1 - Delete and recreate:**
+```bash
+# Delete from AWS
+aws ec2 delete-key-pair --key-name devops-project-key --region ap-south-1
+
+# Delete local file if exists
+rm ~/.ssh/devops-project-key.pem
+
+# Create new key
+aws ec2 create-key-pair \
+  --key-name devops-project-key \
+  --region ap-south-1 \
+  --query 'KeyMaterial' \
+  --output text > ~/.ssh/devops-project-key.pem
+
+# Set permissions
+chmod 400 ~/.ssh/devops-project-key.pem
+```
+
+**Issue: "not a public key file" or empty file**
+
+The key file is empty or corrupted.
+
+**Solution:**
+```bash
+# Check file size
+ls -lh ~/.ssh/devops-project-key.pem
+
+# If it's 0 bytes, delete and recreate
+rm ~/.ssh/devops-project-key.pem
+aws ec2 delete-key-pair --key-name devops-project-key --region ap-south-1
+
+# Create new key
+aws ec2 create-key-pair \
+  --key-name devops-project-key \
+  --region ap-south-1 \
+  --query 'KeyMaterial' \
+  --output text > ~/.ssh/devops-project-key.pem
+
+chmod 400 ~/.ssh/devops-project-key.pem
+```
+
+**Issue: Wrong region**
+
+Make sure you specify `--region ap-south-1` in all commands if that's your region.
+
+---
+
 ## Step 6: Install Terraform (If Not Installed)
 
 ### macOS:
@@ -852,7 +906,7 @@ ansible frontend -i inventory/hosts.ini -m shell -a "systemctl status nginx" --b
 ansible monitoring -i inventory/hosts.ini -m shell -a "systemctl status nagios" --become
 ```
 
-✅ **All tests passing means deployment is successful!**
+✅ **All tests passing means deployment is successful!
 
 **Time required**: ~5 minutes
 

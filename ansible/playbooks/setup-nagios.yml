@@ -9,8 +9,9 @@
     nagios_plugins_version: "2.4.6"
     nagios_admin_user: nagiosadmin
     nagios_admin_password: nagiosadmin
-    backend_ip: "{{ hostvars[groups['backend'][0]]['ansible_default_ipv4']['address'] if groups['backend'] | length > 0 else '127.0.0.1' }}"
-    frontend_ip: "{{ hostvars[groups['frontend'][0]]['ansible_default_ipv4']['address'] if groups['frontend'] | length > 0 else '127.0.0.1' }}"
+    # Use public IPs from inventory instead of gathering facts
+    backend_ip: "{{ groups['backend'][0] }}"
+    frontend_ip: "{{ groups['frontend'][0] }}"
 
   tasks:
     - name: Update apt cache
@@ -93,10 +94,44 @@
         chdir: "/tmp/nagios-{{ nagios_version }}"
         target: install-webconf
 
+    - name: Create proper Apache configuration for Nagios
+      copy:
+        content: |
+          ScriptAlias /nagios/cgi-bin "/usr/local/nagios/sbin"
+          
+          <Directory "/usr/local/nagios/sbin">
+             Options ExecCGI
+             AllowOverride None
+             AuthName "Nagios Access"
+             AuthType Basic
+             AuthUserFile /usr/local/nagios/etc/htpasswd.users
+             Require valid-user
+          </Directory>
+          
+          Alias /nagios "/usr/local/nagios/share"
+          
+          <Directory "/usr/local/nagios/share">
+             Options None
+             AllowOverride None
+             AuthName "Nagios Access"
+             AuthType Basic
+             AuthUserFile /usr/local/nagios/etc/htpasswd.users
+             Require valid-user
+          </Directory>
+        dest: /etc/apache2/sites-available/nagios.conf
+        mode: '0644'
+
     - name: Create nagiosadmin user for web interface
       command: htpasswd -bc /usr/local/nagios/etc/htpasswd.users {{ nagios_admin_user }} {{ nagios_admin_password }}
       args:
         creates: /usr/local/nagios/etc/htpasswd.users
+
+    - name: Set correct permissions on htpasswd file
+      file:
+        path: /usr/local/nagios/etc/htpasswd.users
+        owner: www-data
+        group: www-data
+        mode: '0644'
 
     - name: Download Nagios Plugins
       get_url:
@@ -209,6 +244,13 @@
         - "cfg_file=/usr/local/nagios/etc/objects/backend.cfg"
         - "cfg_file=/usr/local/nagios/etc/objects/frontend.cfg"
 
+    - name: Update lock file path in nagios.cfg
+      lineinfile:
+        path: /usr/local/nagios/etc/nagios.cfg
+        regexp: '^lock_file='
+        line: 'lock_file=/usr/local/nagios/var/nagios.lock'
+        state: present
+
     - name: Verify Nagios configuration
       command: /usr/local/nagios/bin/nagios -v /usr/local/nagios/etc/nagios.cfg
       register: nagios_verify
@@ -227,19 +269,45 @@
       args:
         creates: /etc/apache2/sites-enabled/nagios.conf
 
+    - name: Set correct permissions on Nagios directories
+      file:
+        path: "{{ item }}"
+        owner: nagios
+        group: nagios
+        mode: '0755'
+        state: directory
+        recurse: yes
+      loop:
+        - /usr/local/nagios
+        - /usr/local/nagios/var
+        - /usr/local/nagios/var/rw
+
+    - name: Set correct permissions on command file directory
+      file:
+        path: /usr/local/nagios/var/rw
+        owner: nagios
+        group: nagcmd
+        mode: '2755'
+        state: directory
+
     - name: Create systemd service for Nagios
       copy:
         content: |
           [Unit]
-          Description=Nagios
+          Description=Nagios Network Monitoring
+          Documentation=https://www.nagios.org/documentation
           After=network.target
 
           [Service]
           Type=forking
+          PIDFile=/usr/local/nagios/var/nagios.lock
+          ExecStartPre=/usr/local/nagios/bin/nagios -v /usr/local/nagios/etc/nagios.cfg
           ExecStart=/usr/local/nagios/bin/nagios -d /usr/local/nagios/etc/nagios.cfg
           ExecReload=/bin/kill -HUP $MAINPID
           User=nagios
           Group=nagios
+          StandardOutput=journal
+          StandardError=journal
 
           [Install]
           WantedBy=multi-user.target
@@ -253,7 +321,7 @@
     - name: Enable and start Nagios
       systemd:
         name: nagios
-        state: restarted
+        state: started
         enabled: true
 
     - name: Restart Apache
